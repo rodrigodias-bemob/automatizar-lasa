@@ -1,11 +1,24 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+
+import { ConfigForm } from "@/components/ConfigForm";
+import { TransferHistory } from "@/components/TransferHistory";
 
 const Index = () => {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100">
-      <div className="text-center">
-        <h1 className="text-4xl font-bold mb-4">Welcome to Your Blank App</h1>
-        <p className="text-xl text-gray-600">Start building your amazing project here!</p>
+    <div className="min-h-screen bg-background">
+      <div className="container py-8 space-y-8">
+        <div className="space-y-2 text-center">
+          <h1 className="text-3xl font-bold tracking-tighter sm:text-4xl md:text-5xl">
+            S3 para SFTP Bridge
+          </h1>
+          <p className="text-muted-foreground">
+            Transferência automática de arquivos do Amazon S3 para SFTP
+          </p>
+        </div>
+
+        <div className="grid gap-8">
+          <ConfigForm />
+          <TransferHistory />
+        </div>
       </div>
     </div>
   );
