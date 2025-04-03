@@ -25,7 +25,7 @@ const config = {
   slack: {
     webhookUrl: process.env.SLACK_WEBHOOK_URL,
   },
-  filePrefix: process.env.FILE_PREFIX || 'data',
+  filePrefix: process.env.FILE_PREFIX || '2025',
   tempDir: process.env.TEMP_DIR || './temp',
 };
 
@@ -44,39 +44,57 @@ function formatDate(date = new Date()) {
   return format(date, 'yyyy-MM-dd');
 }
 
+// Função para renomear o arquivo removendo o sufixo "_RECHARGE_REPORT"
+function renameFile(fileName) {
+  // Verifica se o nome do arquivo contém "_RECHARGE_REPORT"
+  if (fileName.includes('_RECHARGE_REPORT')) {
+    // Remove o sufixo "_RECHARGE_REPORT" do nome do arquivo
+    return fileName.replace('_RECHARGE_REPORT', '');
+  }
+  return fileName;
+}
+
 // Verifica se o arquivo do dia existe no S3
 async function checkDailyFile() {
   const today = formatDate();
-  const expectedFileName = `${config.filePrefix}-${today}.csv`;
+  // Usamos o prefixo configurado para buscar por qualquer arquivo que comece com esse prefixo
+  const filePrefix = config.filePrefix;
   
   try {
-    console.log(`Verificando existência do arquivo ${expectedFileName} no bucket ${config.s3.bucket}`);
+    console.log(`Verificando existência de arquivos que começam com ${filePrefix} no bucket ${config.s3.bucket}`);
     
     // Lista todos os arquivos no bucket
     const { Contents } = await s3.listObjects({ 
       Bucket: config.s3.bucket,
-      Prefix: config.filePrefix
+      Prefix: filePrefix
     }).promise();
     
-    // Verifica se há algum arquivo correspondente ao padrão do dia
-    const dailyFile = Contents.find(file => 
-      file.Key.includes(expectedFileName));
-    
-    if (dailyFile) {
-      console.log(`Arquivo do dia encontrado: ${dailyFile.Key}`);
-      return { 
-        exists: true, 
-        fileName: dailyFile.Key 
-      };
-    } else {
-      console.log(`Arquivo do dia não encontrado: ${expectedFileName}`);
-      
-      // Envia alerta para o Slack
-      await sendSlackAlert(`Arquivo diário não encontrado: ${expectedFileName}`);
-      
+    if (!Contents || Contents.length === 0) {
+      console.log(`Nenhum arquivo encontrado com o prefixo ${filePrefix}`);
+      await sendSlackAlert(`Nenhum arquivo encontrado com o prefixo ${filePrefix}`);
       return { 
         exists: false, 
-        fileName: expectedFileName 
+        fileName: null 
+      };
+    }
+    
+    // Obtém o arquivo mais recente (assumindo que queremos o mais recente)
+    const latestFile = Contents.sort((a, b) => 
+      new Date(b.LastModified) - new Date(a.LastModified)
+    )[0];
+    
+    if (latestFile) {
+      console.log(`Arquivo mais recente encontrado: ${latestFile.Key}`);
+      return { 
+        exists: true, 
+        fileName: latestFile.Key 
+      };
+    } else {
+      console.log(`Nenhum arquivo válido encontrado com o prefixo ${filePrefix}`);
+      await sendSlackAlert(`Nenhum arquivo válido encontrado com o prefixo ${filePrefix}`);
+      return { 
+        exists: false, 
+        fileName: null 
       };
     }
   } catch (error) {
@@ -135,7 +153,7 @@ async function downloadFileFromS3(fileName) {
 }
 
 // Envia o arquivo para o SFTP
-async function uploadFileToSftp(localFilePath, remoteFileName) {
+async function uploadFileToSftp(localFilePath, originalFileName) {
   try {
     console.log(`Conectando ao servidor SFTP: ${config.sftp.host}`);
     
@@ -146,9 +164,13 @@ async function uploadFileToSftp(localFilePath, remoteFileName) {
       password: config.sftp.password,
     });
     
-    // Verifica se o diretório remoto existe
-    const remotePath = `${config.sftp.directory}/${remoteFileName}`;
+    // Renomeia o arquivo antes de enviar para o SFTP
+    const renamedFileName = renameFile(path.basename(originalFileName));
+    const remotePath = `${config.sftp.directory}/${renamedFileName}`;
     const remoteDir = path.dirname(remotePath);
+    
+    console.log(`Nome original do arquivo: ${originalFileName}`);
+    console.log(`Nome do arquivo após renomeação: ${renamedFileName}`);
     
     const dirExists = await sftp.exists(remoteDir);
     if (!dirExists) {
@@ -160,11 +182,13 @@ async function uploadFileToSftp(localFilePath, remoteFileName) {
     const result = await sftp.put(localFilePath, remotePath);
     
     console.log(`Arquivo enviado com sucesso para ${remotePath}`);
-    await sendSlackAlert(`✅ Arquivo ${remoteFileName} transferido com sucesso para o SFTP`);
+    await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o SFTP`);
     
     return {
       success: true,
-      remotePath: remotePath
+      remotePath: remotePath,
+      originalName: originalFileName,
+      renamedTo: renamedFileName
     };
   } catch (error) {
     console.error('Erro ao enviar arquivo para SFTP:', error);
@@ -199,11 +223,11 @@ async function transferDailyFileFromS3ToSftp() {
     // Verifica se o arquivo do dia existe
     const { exists, fileName } = await checkDailyFile();
     
-    if (!exists) {
+    if (!exists || !fileName) {
       console.log('Arquivo diário não encontrado. Processo encerrado.');
       return {
         success: false,
-        message: `Arquivo ${fileName} não encontrado no S3`
+        message: `Arquivo não encontrado no S3`
       };
     }
     
@@ -211,8 +235,7 @@ async function transferDailyFileFromS3ToSftp() {
     const localFilePath = await downloadFileFromS3(fileName);
     
     // Envia o arquivo para o SFTP
-    const remoteFileName = path.basename(fileName);
-    const uploadResult = await uploadFileToSftp(localFilePath, remoteFileName);
+    const uploadResult = await uploadFileToSftp(localFilePath, fileName);
     
     // Limpa arquivos temporários
     cleanupTempFile(localFilePath);
@@ -220,7 +243,7 @@ async function transferDailyFileFromS3ToSftp() {
     console.log('Processo de transferência concluído com sucesso');
     return {
       success: true,
-      message: `Arquivo ${fileName} transferido com sucesso para ${uploadResult.remotePath}`
+      message: `Arquivo ${fileName} transferido com sucesso para ${uploadResult.remotePath} com o novo nome ${uploadResult.renamedTo}`
     };
   } catch (error) {
     console.error('Erro durante o processo de transferência:', error);
