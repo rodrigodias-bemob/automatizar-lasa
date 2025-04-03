@@ -1,3 +1,4 @@
+
 # Welcome to your Lovable project
 
 ## Project info
@@ -34,6 +35,40 @@ npm i
 
 # Step 4: Start the development server with auto-reloading and an instant preview.
 npm run dev
+```
+
+## Docker
+
+Este projeto inclui um Dockerfile que permite executar tanto a aplicação web quanto o worker de transferência S3-SFTP em um único container.
+
+### Construir a imagem
+
+```bash
+docker build -t s3-to-sftp-bridge .
+```
+
+### Executar o container
+
+```bash
+docker run --name s3-to-sftp-bridge \
+  -p 8080:8080 \
+  -e S3_ACCESS_KEY=sua_access_key \
+  -e S3_SECRET_KEY=sua_secret_key \
+  -e S3_BUCKET=nome_do_bucket \
+  -e SFTP_HOST=endereco.sftp.com \
+  -e SFTP_USERNAME=usuario \
+  -e SFTP_PASSWORD=senha \
+  -e SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz \
+  s3-to-sftp-bridge
+```
+
+Alternativamente, você pode usar um arquivo .env:
+
+```bash
+docker run --name s3-to-sftp-bridge \
+  -p 8080:8080 \
+  --env-file .env \
+  s3-to-sftp-bridge
 ```
 
 **Edit a file directly in GitHub**

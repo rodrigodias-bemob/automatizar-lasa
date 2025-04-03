@@ -1,8 +1,2 @@
 
-node_modules
-npm-debug.log
-.env
-temp
-*.md
-.git
-.gitignore
+

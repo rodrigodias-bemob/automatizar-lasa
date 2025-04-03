@@ -1,0 +1,9 @@
+
+node_modules
+npm-debug.log
+.env
+src/worker/temp
+*.md
+.git
+.gitignore
+dist
