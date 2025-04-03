@@ -1,0 +1,17 @@
+
+{
+  "name": "s3-to-sftp-worker",
+  "version": "1.0.0",
+  "description": "Worker para transferência automática de arquivos S3 para SFTP",
+  "main": "s3-to-sftp-worker.js",
+  "scripts": {
+    "start": "node s3-to-sftp-worker.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1483.0",
+    "ssh2-sftp-client": "^9.1.0",
+    "axios": "^1.6.0",
+    "date-fns": "^2.30.0"
+  }
+}
