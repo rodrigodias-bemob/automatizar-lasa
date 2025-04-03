@@ -46,6 +46,37 @@ Execute o worker manualmente:
 npm start
 ```
 
+### Docker
+
+#### Construir a imagem
+
+```bash
+cd src/worker
+docker build -t s3-to-sftp-worker .
+```
+
+#### Executar o container
+
+```bash
+docker run --name s3-to-sftp-worker \
+  -e S3_ACCESS_KEY=sua_access_key \
+  -e S3_SECRET_KEY=sua_secret_key \
+  -e S3_BUCKET=nome_do_bucket \
+  -e SFTP_HOST=endereco.sftp.com \
+  -e SFTP_USERNAME=usuario \
+  -e SFTP_PASSWORD=senha \
+  -e SLACK_WEBHOOK_URL=https://hooks.slack.com/services/xxx/yyy/zzz \
+  s3-to-sftp-worker
+```
+
+Alternativamente, você pode usar um arquivo .env:
+
+```bash
+docker run --name s3-to-sftp-worker \
+  --env-file .env \
+  s3-to-sftp-worker
+```
+
 ### Agendamento com Cron
 
 Para executar o worker automaticamente todos os dias, adicione uma entrada no crontab:
@@ -53,6 +84,15 @@ Para executar o worker automaticamente todos os dias, adicione uma entrada no cr
 ```bash
 # Executar todos os dias às 10:00
 0 10 * * * cd /caminho/para/worker && npm start >> /var/log/s3-sftp-worker.log 2>&1
+```
+
+#### Agendamento com Docker
+
+Se estiver usando Docker, você pode configurar um cron job para executar o container:
+
+```bash
+# Executar todos os dias às 10:00
+0 10 * * * docker run --rm --env-file /caminho/para/.env s3-to-sftp-worker >> /var/log/s3-sftp-worker.log 2>&1
 ```
 
 ## Logs
