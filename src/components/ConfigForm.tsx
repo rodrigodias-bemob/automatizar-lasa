@@ -5,6 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
+import { MessageSquare } from "lucide-react";
 
 export const ConfigForm = () => {
   const [s3Config, setS3Config] = useState({
@@ -22,12 +23,21 @@ export const ConfigForm = () => {
     directory: "",
   });
 
+  const [slackConfig, setSlackConfig] = useState({
+    webhookUrl: "",
+    channel: "",
+  });
+
   const handleS3Change = (e: React.ChangeEvent<HTMLInputElement>) => {
     setS3Config({ ...s3Config, [e.target.name]: e.target.value });
   };
 
   const handleSftpChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setSftpConfig({ ...sftpConfig, [e.target.name]: e.target.value });
+  };
+
+  const handleSlackChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setSlackConfig({ ...slackConfig, [e.target.name]: e.target.value });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -141,6 +151,37 @@ export const ConfigForm = () => {
               value={sftpConfig.directory}
               onChange={handleSftpChange}
               placeholder="Caminho do diretório no SFTP"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <MessageSquare className="h-5 w-5" />
+            Configuração do Slack
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="webhookUrl">Webhook URL</Label>
+            <Input
+              id="webhookUrl"
+              name="webhookUrl"
+              value={slackConfig.webhookUrl}
+              onChange={handleSlackChange}
+              placeholder="URL do webhook do Slack"
+            />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="channel">Canal (opcional)</Label>
+            <Input
+              id="channel"
+              name="channel"
+              value={slackConfig.channel}
+              onChange={handleSlackChange}
+              placeholder="ex: #notificacoes"
             />
           </div>
         </CardContent>
