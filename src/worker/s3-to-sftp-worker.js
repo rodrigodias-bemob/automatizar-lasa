@@ -1,4 +1,3 @@
-
 const AWS = require('aws-sdk');
 const Client = require('ssh2-sftp-client');
 const axios = require('axios');
@@ -26,7 +25,6 @@ const config = {
     webhookUrl: process.env.SLACK_WEBHOOK_URL,
   },
   filePrefix: process.env.FILE_PREFIX || '2025',
-  tempDir: process.env.TEMP_DIR || './temp',
 };
 
 // Configuração do cliente S3
@@ -124,27 +122,22 @@ async function sendSlackAlert(message) {
   }
 }
 
-// Baixa o arquivo do S3 para o diretório temporário local
+// Baixa o arquivo do S3 e mantém em memória (sem gravar em disco)
 async function downloadFileFromS3(fileName) {
-  // Garante que o diretório temporário existe
-  if (!fs.existsSync(config.tempDir)) {
-    fs.mkdirSync(config.tempDir, { recursive: true });
-  }
-  
-  const localFilePath = path.join(config.tempDir, path.basename(fileName));
-  
   try {
-    console.log(`Baixando arquivo ${fileName} do bucket ${config.s3.bucket}`);
+    console.log(`Baixando arquivo ${fileName} do bucket ${config.s3.bucket} para memória`);
     
     const { Body } = await s3.getObject({
       Bucket: config.s3.bucket,
       Key: fileName,
     }).promise();
     
-    fs.writeFileSync(localFilePath, Body);
-    console.log(`Arquivo baixado para ${localFilePath}`);
+    console.log(`Arquivo baixado para memória com sucesso`);
     
-    return localFilePath;
+    return {
+      buffer: Body,
+      fileName: path.basename(fileName)
+    };
   } catch (error) {
     console.error(`Erro ao baixar arquivo ${fileName} do S3:`, error);
     await sendSlackAlert(`Erro ao baixar arquivo ${fileName} do S3: ${error.message}`);
@@ -152,8 +145,8 @@ async function downloadFileFromS3(fileName) {
   }
 }
 
-// Envia o arquivo para o SFTP
-async function uploadFileToSftp(localFilePath, originalFileName) {
+// Envia o arquivo para o SFTP diretamente da memória
+async function uploadFileToSftp(fileData, originalFileName) {
   try {
     console.log(`Conectando ao servidor SFTP: ${config.sftp.host}`);
     
@@ -178,8 +171,9 @@ async function uploadFileToSftp(localFilePath, originalFileName) {
       await sftp.mkdir(remoteDir, true);
     }
     
-    console.log(`Enviando ${localFilePath} para ${remotePath}`);
-    const result = await sftp.put(localFilePath, remotePath);
+    console.log(`Enviando arquivo da memória para ${remotePath}`);
+    // Usamos o buffer diretamente, sem necessidade de arquivo local
+    const result = await sftp.put(fileData.buffer, remotePath);
     
     console.log(`Arquivo enviado com sucesso para ${remotePath}`);
     await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o SFTP`);
@@ -204,16 +198,6 @@ async function uploadFileToSftp(localFilePath, originalFileName) {
   }
 }
 
-// Limpa arquivos temporários
-function cleanupTempFile(filePath) {
-  try {
-    fs.unlinkSync(filePath);
-    console.log(`Arquivo temporário ${filePath} removido`);
-  } catch (error) {
-    console.error(`Erro ao remover arquivo temporário ${filePath}:`, error);
-  }
-}
-
 // Função principal que orquestra todo o processo
 async function transferDailyFileFromS3ToSftp() {
   console.log('Iniciando processo de transferência S3 -> SFTP');
@@ -231,14 +215,11 @@ async function transferDailyFileFromS3ToSftp() {
       };
     }
     
-    // Baixa o arquivo do S3
-    const localFilePath = await downloadFileFromS3(fileName);
+    // Baixa o arquivo do S3 para a memória
+    const fileData = await downloadFileFromS3(fileName);
     
-    // Envia o arquivo para o SFTP
-    const uploadResult = await uploadFileToSftp(localFilePath, fileName);
-    
-    // Limpa arquivos temporários
-    cleanupTempFile(localFilePath);
+    // Envia o arquivo para o SFTP diretamente da memória
+    const uploadResult = await uploadFileToSftp(fileData, fileName);
     
     console.log('Processo de transferência concluído com sucesso');
     return {

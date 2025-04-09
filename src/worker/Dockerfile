@@ -7,9 +7,6 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install
 
-# Criar diretório temporário
-RUN mkdir -p ./temp
-
 # Copiar código fonte
 COPY . .
 
