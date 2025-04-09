@@ -1,3 +1,4 @@
+
 const AWS = require('aws-sdk');
 const Client = require('ssh2-sftp-client');
 const axios = require('axios');
@@ -11,8 +12,9 @@ const config = {
   s3: {
     accessKey: process.env.S3_ACCESS_KEY,
     secretKey: process.env.S3_SECRET_KEY,
-    bucket: process.env.S3_BUCKET,
+    bucket: process.env.S3_BUCKET || 'm4u-conciliation',
     region: process.env.S3_REGION || 'us-east-1',
+    prefix: process.env.S3_PREFIX || 'lasa/inbound/',
   },
   sftp: {
     host: process.env.SFTP_HOST,
@@ -57,19 +59,21 @@ async function checkDailyFile() {
   const today = formatDate();
   // Usamos o prefixo configurado para buscar por qualquer arquivo que comece com esse prefixo
   const filePrefix = config.filePrefix;
+  const s3Prefix = config.s3.prefix; // Prefixo do diretório no S3
   
   try {
-    console.log(`Verificando existência de arquivos que começam com ${filePrefix} no bucket ${config.s3.bucket}`);
+    console.log(`Verificando existência de arquivos que começam com ${filePrefix} no bucket ${config.s3.bucket} no diretório ${s3Prefix}`);
     
-    // Lista todos os arquivos no bucket
+    // Lista todos os arquivos no bucket com o prefixo do diretório e do arquivo
+    const completePrefix = s3Prefix + filePrefix;
     const { Contents } = await s3.listObjects({ 
       Bucket: config.s3.bucket,
-      Prefix: filePrefix
+      Prefix: completePrefix
     }).promise();
     
     if (!Contents || Contents.length === 0) {
-      console.log(`Nenhum arquivo encontrado com o prefixo ${filePrefix}`);
-      await sendSlackAlert(`Nenhum arquivo encontrado com o prefixo ${filePrefix}`);
+      console.log(`Nenhum arquivo encontrado com o prefixo ${completePrefix}`);
+      await sendSlackAlert(`Nenhum arquivo encontrado com o prefixo ${completePrefix}`);
       return { 
         exists: false, 
         fileName: null 
@@ -88,8 +92,8 @@ async function checkDailyFile() {
         fileName: latestFile.Key 
       };
     } else {
-      console.log(`Nenhum arquivo válido encontrado com o prefixo ${filePrefix}`);
-      await sendSlackAlert(`Nenhum arquivo válido encontrado com o prefixo ${filePrefix}`);
+      console.log(`Nenhum arquivo válido encontrado com o prefixo ${completePrefix}`);
+      await sendSlackAlert(`Nenhum arquivo válido encontrado com o prefixo ${completePrefix}`);
       return { 
         exists: false, 
         fileName: null 
