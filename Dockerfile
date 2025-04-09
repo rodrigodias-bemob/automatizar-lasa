@@ -8,14 +8,15 @@ WORKDIR /app
 # Copiar arquivos de package.json e package-lock.json
 COPY package*.json ./
 
-# Instalar dependências
+# Instalar dependências da aplicação principal
 RUN npm install
+
+# Copiar package.json do worker e instalar suas dependências
+COPY src/worker/package.json ./src/worker/
+RUN cd ./src/worker && npm install
 
 # Copiar código fonte
 COPY . .
-
-# Criar diretório para arquivos temporários do worker
-RUN mkdir -p ./src/worker/temp
 
 # Configurar timezone (opcional)
 ENV TZ=America/Sao_Paulo
