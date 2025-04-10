@@ -1,6 +1,5 @@
-
 const AWS = require('aws-sdk');
-const Client = require('ssh2-sftp-client');
+const ftp = require('basic-ftp');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
@@ -16,12 +15,13 @@ const config = {
     region: process.env.S3_REGION || 'us-east-1',
     prefix: process.env.S3_PREFIX || 'lasa/inbound/',
   },
-  sftp: {
-    host: process.env.SFTP_HOST,
-    port: parseInt(process.env.SFTP_PORT || '22'),
-    username: process.env.SFTP_USERNAME,
-    password: process.env.SFTP_PASSWORD,
-    directory: process.env.SFTP_DIRECTORY || '/',
+  ftp: {
+    host: process.env.FTP_HOST,
+    port: parseInt(process.env.FTP_PORT || '21'),
+    username: process.env.FTP_USERNAME,
+    password: process.env.FTP_PASSWORD,
+    directory: process.env.FTP_DIRECTORY || '/',
+    secure: process.env.FTP_SECURE === 'true',
   },
   slack: {
     webhookUrl: process.env.SLACK_WEBHOOK_URL,
@@ -35,9 +35,6 @@ const s3 = new AWS.S3({
   secretAccessKey: config.s3.secretKey,
   region: config.s3.region,
 });
-
-// Cliente SFTP
-const sftp = new Client();
 
 // Função para formatar a data atual ou uma data específica
 function formatDate(date = new Date()) {
@@ -149,62 +146,59 @@ async function downloadFileFromS3(fileName) {
   }
 }
 
-// Envia o arquivo para o SFTP diretamente da memória
-async function uploadFileToSftp(fileData, originalFileName) {
+// Envia o arquivo para o FTP diretamente da memória
+async function uploadFileToFtp(fileData, originalFileName) {
+  const client = new ftp.Client();
+  client.ftp.verbose = true;
+  
   try {
-    console.log(`Conectando ao servidor SFTP: ${config.sftp.host}`);
+    console.log(`Conectando ao servidor FTP: ${config.ftp.host}`);
     
-    await sftp.connect({
-      host: config.sftp.host,
-      port: config.sftp.port,
-      username: config.sftp.username,
-      password: config.sftp.password,
+    // Configurando o cliente FTP
+    await client.access({
+      host: config.ftp.host,
+      port: config.ftp.port,
+      user: config.ftp.username,
+      password: config.ftp.password,
+      secure: config.ftp.secure,
     });
     
-    // Renomeia o arquivo antes de enviar para o SFTP
+    // Renomeia o arquivo antes de enviar para o FTP
     const renamedFileName = renameFile(path.basename(originalFileName));
-    const remotePath = `${config.sftp.directory}/${renamedFileName}`;
-    const remoteDir = path.dirname(remotePath);
     
     console.log(`Nome original do arquivo: ${originalFileName}`);
     console.log(`Nome do arquivo após renomeação: ${renamedFileName}`);
     
-    const dirExists = await sftp.exists(remoteDir);
-    if (!dirExists) {
-      console.log(`Criando diretório remoto: ${remoteDir}`);
-      await sftp.mkdir(remoteDir, true);
-    }
+    // Navega para o diretório configurado
+    await client.ensureDir(config.ftp.directory);
     
-    console.log(`Enviando arquivo da memória para ${remotePath}`);
-    // Usamos o buffer diretamente, sem necessidade de arquivo local
-    const result = await sftp.put(fileData.buffer, remotePath);
+    console.log(`Enviando arquivo da memória para ${config.ftp.directory}/${renamedFileName}`);
     
-    console.log(`Arquivo enviado com sucesso para ${remotePath}`);
-    await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o SFTP`);
+    // Upload do arquivo da memória
+    await client.uploadFrom(fileData.buffer, renamedFileName);
+    
+    console.log(`Arquivo enviado com sucesso para ${config.ftp.directory}/${renamedFileName}`);
+    await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o FTP`);
     
     return {
       success: true,
-      remotePath: remotePath,
+      remotePath: `${config.ftp.directory}/${renamedFileName}`,
       originalName: originalFileName,
       renamedTo: renamedFileName
     };
   } catch (error) {
-    console.error('Erro ao enviar arquivo para SFTP:', error);
-    await sendSlackAlert(`❌ Erro ao enviar arquivo para SFTP: ${error.message}`);
+    console.error('Erro ao enviar arquivo para FTP:', error);
+    await sendSlackAlert(`❌ Erro ao enviar arquivo para FTP: ${error.message}`);
     throw error;
   } finally {
-    try {
-      await sftp.end();
-      console.log('Conexão SFTP encerrada');
-    } catch (endError) {
-      console.error('Erro ao encerrar conexão SFTP:', endError);
-    }
+    client.close();
+    console.log('Conexão FTP encerrada');
   }
 }
 
 // Função principal que orquestra todo o processo
-async function transferDailyFileFromS3ToSftp() {
-  console.log('Iniciando processo de transferência S3 -> SFTP');
+async function transferDailyFileFromS3ToFtp() {
+  console.log('Iniciando processo de transferência S3 -> FTP');
   console.log(new Date().toISOString());
   
   try {
@@ -222,8 +216,8 @@ async function transferDailyFileFromS3ToSftp() {
     // Baixa o arquivo do S3 para a memória
     const fileData = await downloadFileFromS3(fileName);
     
-    // Envia o arquivo para o SFTP diretamente da memória
-    const uploadResult = await uploadFileToSftp(fileData, fileName);
+    // Envia o arquivo para o FTP diretamente da memória
+    const uploadResult = await uploadFileToFtp(fileData, fileName);
     
     console.log('Processo de transferência concluído com sucesso');
     return {
@@ -240,7 +234,7 @@ async function transferDailyFileFromS3ToSftp() {
 }
 
 // Execute o processo
-transferDailyFileFromS3ToSftp()
+transferDailyFileFromS3ToFtp()
   .then(result => {
     console.log('Resultado do processo:', result);
     process.exit(result.success ? 0 : 1);
