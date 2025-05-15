@@ -4,6 +4,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { format } = require('date-fns');
+const { Readable } = require('stream');
 
 // Configurações - estas devem ser carregadas de um arquivo de configuração
 // ou variáveis de ambiente em um ambiente de produção
@@ -49,6 +50,14 @@ function renameFile(fileName) {
     return fileName.replace('_RECHARGE_REPORT', '');
   }
   return fileName;
+}
+
+// Função para criar um stream legível a partir de um buffer
+function bufferToStream(buffer) {
+  const readable = new Readable();
+  readable.push(buffer);
+  readable.push(null);
+  return readable;
 }
 
 // Verifica se o arquivo do dia existe no S3
@@ -174,8 +183,23 @@ async function uploadFileToFtp(fileData, originalFileName) {
     
     console.log(`Enviando arquivo da memória para ${config.ftp.directory}/${renamedFileName}`);
     
-    // Upload do arquivo da memória
-    await client.uploadFrom(fileData.buffer, renamedFileName);
+    // Cria um diretório temporário se não existir
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+    
+    // Caminho para o arquivo temporário
+    const tempFilePath = path.join(tempDir, renamedFileName);
+    
+    // Grava o buffer em um arquivo temporário
+    fs.writeFileSync(tempFilePath, fileData.buffer);
+    
+    // Upload do arquivo a partir do arquivo temporário
+    await client.uploadFrom(tempFilePath, renamedFileName);
+    
+    // Remove o arquivo temporário após o envio
+    fs.unlinkSync(tempFilePath);
     
     console.log(`Arquivo enviado com sucesso para ${config.ftp.directory}/${renamedFileName}`);
     await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o FTP`);
