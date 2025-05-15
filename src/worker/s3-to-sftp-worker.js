@@ -1,3 +1,4 @@
+
 const AWS = require('aws-sdk');
 const ftp = require('basic-ftp');
 const axios = require('axios');
@@ -50,14 +51,6 @@ function renameFile(fileName) {
     return fileName.replace('_RECHARGE_REPORT', '');
   }
   return fileName;
-}
-
-// Função para criar um stream legível a partir de um buffer
-function bufferToStream(buffer) {
-  const readable = new Readable();
-  readable.push(buffer);
-  readable.push(null);
-  return readable;
 }
 
 // Verifica se o arquivo do dia existe no S3
@@ -178,10 +171,33 @@ async function uploadFileToFtp(fileData, originalFileName) {
     console.log(`Nome original do arquivo: ${originalFileName}`);
     console.log(`Nome do arquivo após renomeação: ${renamedFileName}`);
     
-    // Navega para o diretório configurado
-    await client.ensureDir(config.ftp.directory);
+    // Verifica o diretório atual
+    const currentDir = await client.pwd();
+    console.log(`Diretório atual no FTP: ${currentDir}`);
     
-    console.log(`Enviando arquivo da memória para ${config.ftp.directory}/${renamedFileName}`);
+    // Lista os arquivos no diretório atual
+    console.log('Listando arquivos no diretório atual:');
+    const files = await client.list();
+    files.forEach(file => console.log(`- ${file.name} (${file.type})`));
+    
+    // Define o diretório de trabalho (se especificado e diferente de '/')
+    if (config.ftp.directory && config.ftp.directory !== '/' && config.ftp.directory !== currentDir) {
+      try {
+        await client.cd(config.ftp.directory);
+        console.log(`Diretório alterado para: ${config.ftp.directory}`);
+      } catch (dirError) {
+        console.log(`Diretório ${config.ftp.directory} não encontrado. Tentando criar...`);
+        try {
+          await client.ensureDir(config.ftp.directory);
+          console.log(`Diretório ${config.ftp.directory} criado com sucesso`);
+        } catch (mkdirError) {
+          console.error(`Erro ao criar diretório: ${mkdirError.message}`);
+          throw mkdirError;
+        }
+      }
+    }
+    
+    console.log(`Enviando arquivo para o FTP com nome: ${renamedFileName}`);
     
     // Cria um diretório temporário se não existir
     const tempDir = path.join(__dirname, 'temp');
@@ -191,17 +207,21 @@ async function uploadFileToFtp(fileData, originalFileName) {
     
     // Caminho para o arquivo temporário
     const tempFilePath = path.join(tempDir, renamedFileName);
+    console.log(`Criando arquivo temporário em: ${tempFilePath}`);
     
     // Grava o buffer em um arquivo temporário
     fs.writeFileSync(tempFilePath, fileData.buffer);
+    console.log(`Arquivo temporário criado com tamanho: ${fs.statSync(tempFilePath).size} bytes`);
     
     // Upload do arquivo a partir do arquivo temporário
+    console.log(`Iniciando upload do arquivo: ${tempFilePath} para o FTP como: ${renamedFileName}`);
     await client.uploadFrom(tempFilePath, renamedFileName);
     
     // Remove o arquivo temporário após o envio
     fs.unlinkSync(tempFilePath);
+    console.log(`Arquivo temporário removido: ${tempFilePath}`);
     
-    console.log(`Arquivo enviado com sucesso para ${config.ftp.directory}/${renamedFileName}`);
+    console.log(`Arquivo enviado com sucesso para o FTP como: ${renamedFileName}`);
     await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o FTP`);
     
     return {
