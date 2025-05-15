@@ -22,7 +22,7 @@ const config = {
     port: parseInt(process.env.FTP_PORT || '21'),
     username: process.env.FTP_USERNAME,
     password: process.env.FTP_PASSWORD,
-    directory: process.env.FTP_DIRECTORY || '/',
+    directory: process.env.FTP_DIRECTORY || '/put',
     secure: process.env.FTP_SECURE === 'true',
   },
   slack: {
