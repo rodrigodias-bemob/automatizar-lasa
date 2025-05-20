@@ -13,5 +13,9 @@ RUN npm install
 # Copiar código fonte
 COPY . .
 
-# Executar o worker
+# Saída de log
+ENV NODE_ENV=production
+ENV TZ=America/Sao_Paulo
+
+# Executar o worker com cron
 CMD ["node", "s3-to-sftp-worker.js"]

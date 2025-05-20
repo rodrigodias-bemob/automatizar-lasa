@@ -12,6 +12,8 @@
     "aws-sdk": "^2.1483.0",
     "ssh2-sftp-client": "^9.1.0",
     "axios": "^1.6.0",
-    "date-fns": "^2.30.0"
+    "date-fns": "^2.30.0",
+    "basic-ftp": "^5.0.3",
+    "node-cron": "^3.0.3"
   }
 }

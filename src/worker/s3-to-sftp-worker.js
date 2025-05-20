@@ -5,7 +5,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 const { format } = require('date-fns');
-const { Readable } = require('stream');
+const cron = require('node-cron');
 
 // Configurações - estas devem ser carregadas de um arquivo de configuração
 // ou variáveis de ambiente em um ambiente de produção
@@ -29,6 +29,8 @@ const config = {
     webhookUrl: process.env.SLACK_WEBHOOK_URL,
   },
   filePrefix: process.env.FILE_PREFIX || '2025',
+  cronSchedule: process.env.CRON_SCHEDULE || '0 10 * * *', // Padrão: todos os dias às 10h
+  runOnStart: process.env.RUN_ON_START === 'true' || true,  // Executa ao iniciar, por padrão
 };
 
 // Configuração do cliente S3
@@ -116,7 +118,7 @@ async function sendSlackAlert(message) {
     console.log(`Enviando alerta para o Slack: ${message}`);
     
     await axios.post(config.slack.webhookUrl, {
-      text: `[S3 para SFTP] 🚨 ALERTA: ${message}`,
+      text: `[S3 para FTP] 🚨 ALERTA: ${message}`,
     });
     
     console.log('Notificação enviada com sucesso para o Slack');
@@ -128,14 +130,14 @@ async function sendSlackAlert(message) {
 // Baixa o arquivo do S3 e mantém em memória (sem gravar em disco)
 async function downloadFileFromS3(fileName) {
   try {
-    console.log(`Baixando arquivo ${fileName} do bucket ${config.s3.bucket} para memória`);
+    console.log(`Baixando arquivo ${fileName} do bucket ${config.s3.bucket}`);
     
     const { Body } = await s3.getObject({
       Bucket: config.s3.bucket,
       Key: fileName,
     }).promise();
     
-    console.log(`Arquivo baixado para memória com sucesso`);
+    console.log(`Arquivo baixado com sucesso`);
     
     return {
       buffer: Body,
@@ -148,7 +150,7 @@ async function downloadFileFromS3(fileName) {
   }
 }
 
-// Envia o arquivo para o FTP diretamente da memória
+// Envia o arquivo para o FTP usando um arquivo temporário
 async function uploadFileToFtp(fileData, originalFileName) {
   const client = new ftp.Client();
   client.ftp.verbose = true;
@@ -171,14 +173,25 @@ async function uploadFileToFtp(fileData, originalFileName) {
     console.log(`Nome original do arquivo: ${originalFileName}`);
     console.log(`Nome do arquivo após renomeação: ${renamedFileName}`);
     
+    // Cria um diretório temporário se não existir
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+      console.log(`Diretório temporário criado: ${tempDir}`);
+    }
+    
+    // Caminho para o arquivo temporário
+    const tempFilePath = path.join(tempDir, renamedFileName);
+    console.log(`Criando arquivo temporário em: ${tempFilePath}`);
+    
+    // Grava o buffer em um arquivo temporário
+    fs.writeFileSync(tempFilePath, fileData.buffer);
+    const fileSizeBytes = fs.statSync(tempFilePath).size;
+    console.log(`Arquivo temporário criado com tamanho: ${fileSizeBytes} bytes`);
+    
     // Verifica o diretório atual
     const currentDir = await client.pwd();
     console.log(`Diretório atual no FTP: ${currentDir}`);
-    
-    // Lista os arquivos no diretório atual
-    console.log('Listando arquivos no diretório atual:');
-    const files = await client.list();
-    files.forEach(file => console.log(`- ${file.name} (${file.type})`));
     
     // Define o diretório de trabalho (se especificado e diferente de '/')
     if (config.ftp.directory && config.ftp.directory !== '/' && config.ftp.directory !== currentDir) {
@@ -197,25 +210,19 @@ async function uploadFileToFtp(fileData, originalFileName) {
       }
     }
     
-    console.log(`Enviando arquivo para o FTP com nome: ${renamedFileName}`);
-    
-    // Cria um diretório temporário se não existir
-    const tempDir = path.join(__dirname, 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-    
-    // Caminho para o arquivo temporário
-    const tempFilePath = path.join(tempDir, renamedFileName);
-    console.log(`Criando arquivo temporário em: ${tempFilePath}`);
-    
-    // Grava o buffer em um arquivo temporário
-    fs.writeFileSync(tempFilePath, fileData.buffer);
-    console.log(`Arquivo temporário criado com tamanho: ${fs.statSync(tempFilePath).size} bytes`);
-    
     // Upload do arquivo a partir do arquivo temporário
     console.log(`Iniciando upload do arquivo: ${tempFilePath} para o FTP como: ${renamedFileName}`);
     await client.uploadFrom(tempFilePath, renamedFileName);
+    
+    // Lista os arquivos no diretório atual para verificar o upload
+    console.log('Verificando se o arquivo foi enviado:');
+    const files = await client.list();
+    const uploadedFile = files.find(file => file.name === renamedFileName);
+    if (uploadedFile) {
+      console.log(`Arquivo enviado confirmado: ${renamedFileName}, tamanho: ${uploadedFile.size} bytes`);
+    } else {
+      console.log(`Arquivo não encontrado após upload: ${renamedFileName}`);
+    }
     
     // Remove o arquivo temporário após o envio
     fs.unlinkSync(tempFilePath);
@@ -260,7 +267,7 @@ async function transferDailyFileFromS3ToFtp() {
     // Baixa o arquivo do S3 para a memória
     const fileData = await downloadFileFromS3(fileName);
     
-    // Envia o arquivo para o FTP diretamente da memória
+    // Envia o arquivo para o FTP a partir do arquivo temporário
     const uploadResult = await uploadFileToFtp(fileData, fileName);
     
     console.log('Processo de transferência concluído com sucesso');
@@ -277,13 +284,50 @@ async function transferDailyFileFromS3ToFtp() {
   }
 }
 
-// Execute o processo
-transferDailyFileFromS3ToFtp()
-  .then(result => {
-    console.log('Resultado do processo:', result);
-    process.exit(result.success ? 0 : 1);
-  })
-  .catch(error => {
-    console.error('Erro fatal no processo:', error);
-    process.exit(1);
+// Função para iniciar a tarefa agendada
+function setupScheduler() {
+  console.log(`Configurando job agendado com cron: ${config.cronSchedule}`);
+
+  // Registra a tarefa agendada usando cron
+  cron.schedule(config.cronSchedule, async () => {
+    console.log(`Executando job agendado em ${new Date().toISOString()}`);
+    try {
+      const result = await transferDailyFileFromS3ToFtp();
+      console.log(`Job agendado concluído com status: ${result.success ? 'Sucesso' : 'Falha'}`);
+    } catch (error) {
+      console.error('Erro ao executar job agendado:', error);
+      await sendSlackAlert(`Erro ao executar job agendado: ${error.message}`);
+    }
+  }, {
+    scheduled: true,
+    timezone: 'America/Sao_Paulo' // Configura para o fuso horário do Brasil
   });
+  
+  console.log('Job agendado configurado com sucesso');
+}
+
+// Função principal
+async function main() {
+  // Configura o scheduler com o cron
+  setupScheduler();
+  
+  // Se configurado para rodar na inicialização, executa uma vez
+  if (config.runOnStart) {
+    console.log('Executando transferência inicial...');
+    try {
+      const result = await transferDailyFileFromS3ToFtp();
+      console.log('Resultado da transferência inicial:', result);
+    } catch (error) {
+      console.error('Erro na transferência inicial:', error);
+    }
+  }
+  
+  // Mantém o processo rodando
+  console.log('Worker está rodando e aguardando próximas execuções agendadas...');
+}
+
+// Inicia o worker
+main().catch(error => {
+  console.error('Erro fatal no worker:', error);
+  process.exit(1);
+});
