@@ -3,9 +3,6 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Criar diretório temporário com permissões corretas
-RUN mkdir -p /app/temp && chmod 777 /app/temp
-
 # Copiar package.json e instalar dependências
 COPY package.json ./
 RUN npm install
