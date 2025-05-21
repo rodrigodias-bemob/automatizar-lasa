@@ -1,4 +1,3 @@
-
 const AWS = require('aws-sdk');
 const ftp = require('basic-ftp');
 const axios = require('axios');
@@ -6,6 +5,7 @@ const path = require('path');
 const { format } = require('date-fns');
 const cron = require('node-cron');
 const { Readable } = require('stream');
+const http = require('http');
 
 // Configurações - estas devem ser carregadas de um arquivo de configuração
 // ou variáveis de ambiente em um ambiente de produção
@@ -31,6 +31,10 @@ const config = {
   filePrefix: process.env.FILE_PREFIX || '2025',
   cronSchedule: process.env.CRON_SCHEDULE || '0 10 * * *', // Padrão: todos os dias às 10h
   runOnStart: process.env.RUN_ON_START === 'true' || true,  // Executa ao iniciar, por padrão
+  healthcheck: {
+    port: parseInt(process.env.HEALTHCHECK_PORT || '8081'),
+    path: process.env.HEALTHCHECK_PATH || '/health',
+  }
 };
 
 // Configuração do cliente S3
@@ -39,6 +43,17 @@ const s3 = new AWS.S3({
   secretAccessKey: config.s3.secretKey,
   region: config.s3.region,
 });
+
+// Variáveis para rastrear status do worker
+const workerStatus = {
+  isRunning: false,
+  lastRun: null,
+  lastRunStatus: null,
+  startTime: new Date(),
+  totalRuns: 0,
+  successfulRuns: 0,
+  failedRuns: 0
+};
 
 // Função para formatar a data atual ou uma data específica
 function formatDate(date = new Date()) {
@@ -242,12 +257,17 @@ async function transferDailyFileFromS3ToFtp() {
   console.log('Iniciando processo de transferência S3 -> FTP');
   console.log(new Date().toISOString());
   
+  workerStatus.isRunning = true;
+  workerStatus.lastRun = new Date();
+  
   try {
     // Verifica se o arquivo do dia existe
     const { exists, fileName } = await checkDailyFile();
     
     if (!exists || !fileName) {
       console.log('Arquivo diário não encontrado. Processo encerrado.');
+      workerStatus.lastRunStatus = 'failure';
+      workerStatus.failedRuns++;
       return {
         success: false,
         message: `Arquivo não encontrado no S3`
@@ -261,17 +281,69 @@ async function transferDailyFileFromS3ToFtp() {
     const uploadResult = await uploadFileToFtp(fileData, fileName);
     
     console.log('Processo de transferência concluído com sucesso');
+    workerStatus.lastRunStatus = 'success';
+    workerStatus.successfulRuns++;
     return {
       success: true,
       message: `Arquivo ${fileName} transferido com sucesso para ${uploadResult.remotePath} com o novo nome ${uploadResult.renamedTo}`
     };
   } catch (error) {
     console.error('Erro durante o processo de transferência:', error);
+    workerStatus.lastRunStatus = 'failure';
+    workerStatus.failedRuns++;
     return {
       success: false,
       message: `Erro durante a transferência: ${error.message}`
     };
+  } finally {
+    workerStatus.isRunning = false;
+    workerStatus.totalRuns++;
   }
+}
+
+// Inicia o servidor HTTP para endpoint de healthcheck
+function startHealthcheckServer() {
+  const server = http.createServer((req, res) => {
+    if (req.url === config.healthcheck.path && req.method === 'GET') {
+      const health = {
+        status: 'UP',
+        timestamp: new Date().toISOString(),
+        uptime: Math.floor((new Date() - workerStatus.startTime) / 1000),
+        worker: {
+          isRunning: workerStatus.isRunning,
+          lastRun: workerStatus.lastRun ? workerStatus.lastRun.toISOString() : null,
+          lastRunStatus: workerStatus.lastRunStatus,
+          stats: {
+            totalRuns: workerStatus.totalRuns,
+            successfulRuns: workerStatus.successfulRuns,
+            failedRuns: workerStatus.failedRuns
+          },
+          cronSchedule: config.cronSchedule
+        }
+      };
+      
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(health, null, 2));
+    } else {
+      res.writeHead(404);
+      res.end('Not Found');
+    }
+  });
+
+  server.listen(config.healthcheck.port, () => {
+    console.log(`Healthcheck server rodando na porta ${config.healthcheck.port}`);
+    console.log(`Endpoint de healthcheck disponível em: http://localhost:${config.healthcheck.port}${config.healthcheck.path}`);
+  });
+
+  // Adicionar tratamento de erro para o servidor
+  server.on('error', (error) => {
+    console.error(`Erro no servidor de healthcheck: ${error.message}`);
+    if (error.code === 'EADDRINUSE') {
+      console.error(`A porta ${config.healthcheck.port} já está em uso. Escolha outra porta.`);
+    }
+  });
+
+  return server;
 }
 
 // Função para iniciar a tarefa agendada
@@ -299,6 +371,9 @@ function setupScheduler() {
 
 // Função principal
 async function main() {
+  // Inicia o servidor de healthcheck
+  const healthcheckServer = startHealthcheckServer();
+  
   // Configura o scheduler com o cron
   setupScheduler();
   
@@ -315,6 +390,32 @@ async function main() {
   
   // Mantém o processo rodando
   console.log('Worker está rodando e aguardando próximas execuções agendadas...');
+  console.log(`Healthcheck disponível em: http://localhost:${config.healthcheck.port}${config.healthcheck.path}`);
+
+  // Configurar manipuladores de eventos para desligar graciosamente
+  process.on('SIGTERM', () => {
+    console.log('Recebido sinal SIGTERM. Encerrando worker...');
+    if (healthcheckServer) {
+      healthcheckServer.close(() => {
+        console.log('Servidor de healthcheck encerrado.');
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
+  });
+
+  process.on('SIGINT', () => {
+    console.log('Recebido sinal SIGINT. Encerrando worker...');
+    if (healthcheckServer) {
+      healthcheckServer.close(() => {
+        console.log('Servidor de healthcheck encerrado.');
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
+  });
 }
 
 // Inicia o worker

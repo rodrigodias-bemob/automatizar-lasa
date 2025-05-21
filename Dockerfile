@@ -21,8 +21,9 @@ COPY . .
 # Configurar timezone (opcional)
 ENV TZ=America/Sao_Paulo
 
-# Expor a porta para a aplicação web
+# Expor as portas para a aplicação web e healthcheck
 EXPOSE 8080
+EXPOSE 8081
 
 # Comando para iniciar a aplicação web e o worker
 # O worker será executado em segundo plano com um script de inicialização
