@@ -1,5 +1,5 @@
 const AWS = require('aws-sdk');
-const ftp = require('basic-ftp');
+const Client = require('ssh2-sftp-client');
 const axios = require('axios');
 const path = require('path');
 const { format } = require('date-fns');
@@ -17,13 +17,12 @@ const config = {
     region: process.env.S3_REGION || 'us-east-1',
     prefix: process.env.S3_PREFIX || 'lasa/inbound/',
   },
-  ftp: {
-    host: process.env.FTP_HOST,
-    port: parseInt(process.env.FTP_PORT || '21'),
-    username: process.env.FTP_USERNAME,
-    password: process.env.FTP_PASSWORD,
-    directory: process.env.FTP_DIRECTORY || '/put',
-    secure: process.env.FTP_SECURE === 'true',
+  sftp: {
+    host: process.env.SFTP_HOST,
+    port: parseInt(process.env.SFTP_PORT || '22'),
+    username: process.env.SFTP_USERNAME,
+    password: process.env.SFTP_PASSWORD,
+    directory: process.env.SFTP_DIRECTORY || '/put',
   },
   slack: {
     webhookUrl: process.env.SLACK_WEBHOOK_URL,
@@ -133,7 +132,7 @@ async function sendSlackAlert(message) {
     console.log(`Enviando alerta para o Slack: ${message}`);
     
     await axios.post(config.slack.webhookUrl, {
-      text: `[S3 para FTP] 🚨 ALERTA: ${message}`,
+      text: `[S3 para SFTP] 🚨 ALERTA: ${message}`,
     });
     
     console.log('Notificação enviada com sucesso para o Slack');
@@ -174,87 +173,78 @@ function bufferToStream(buffer) {
   return readable;
 }
 
-// Envia o arquivo para o FTP diretamente da memória usando streams
-async function uploadFileToFtp(fileData, originalFileName) {
-  const client = new ftp.Client();
-  client.ftp.verbose = true;
+// Envia o arquivo para o SFTP diretamente da memória usando streams
+async function uploadFileToSftp(fileData, originalFileName) {
+  const client = new Client();
   
   try {
-    console.log(`Conectando ao servidor FTP: ${config.ftp.host}`);
+    console.log(`Conectando ao servidor SFTP: ${config.sftp.host}`);
     
-    // Configurando o cliente FTP
-    await client.access({
-      host: config.ftp.host,
-      port: config.ftp.port,
-      user: config.ftp.username,
-      password: config.ftp.password,
-      secure: config.ftp.secure,
+    // Configurando o cliente SFTP
+    await client.connect({
+      host: config.sftp.host,
+      port: config.sftp.port,
+      username: config.sftp.username,
+      password: config.sftp.password,
     });
     
-    // Renomeia o arquivo antes de enviar para o FTP
+    console.log('Conexão SFTP estabelecida com sucesso');
+    
+    // Renomeia o arquivo antes de enviar para o SFTP
     const renamedFileName = renameFile(path.basename(originalFileName));
     
     console.log(`Nome original do arquivo: ${originalFileName}`);
     console.log(`Nome do arquivo após renomeação: ${renamedFileName}`);
     
     // Define o diretório de trabalho (se especificado e diferente de '/')
-    if (config.ftp.directory && config.ftp.directory !== '/' && config.ftp.directory !== '.') {
+    if (config.sftp.directory && config.sftp.directory !== '/' && config.sftp.directory !== '.') {
       try {
-        await client.cd(config.ftp.directory);
-        console.log(`Diretório alterado para: ${config.ftp.directory}`);
-      } catch (dirError) {
-        console.log(`Diretório ${config.ftp.directory} não encontrado. Tentando criar...`);
-        try {
-          await client.ensureDir(config.ftp.directory);
-          console.log(`Diretório ${config.ftp.directory} criado com sucesso`);
-        } catch (mkdirError) {
-          console.error(`Erro ao criar diretório: ${mkdirError.message}`);
-          // Se não conseguir mudar de diretório, tentamos usar o diretório raiz
-          await client.cd('/');
-          console.log('Usando o diretório raiz para o upload');
-        }
+        // Tenta criar o diretório se não existir
+        await client.mkdir(config.sftp.directory, true);
+        console.log(`Diretório ${config.sftp.directory} verificado/criado`);
+      } catch (mkdirError) {
+        console.log(`Nota: ${mkdirError.message}`);
       }
     }
     
-    // Converte o buffer em stream para upload direto da memória
-    const fileStream = bufferToStream(fileData.buffer);
+    // Caminho completo do arquivo no SFTP
+    const remotePath = `${config.sftp.directory}/${renamedFileName}`.replace(/\/+/g, '/');
     
-    // Upload do arquivo diretamente do stream
-    console.log(`Enviando arquivo da memória para ${config.ftp.directory}/${renamedFileName}`);
-    await client.uploadFrom(fileStream, renamedFileName);
+    // Upload do arquivo diretamente do buffer usando stream
+    console.log(`Enviando arquivo da memória para ${remotePath}`);
+    await client.put(fileData.buffer, remotePath);
     
-    // Lista os arquivos no diretório atual para verificar o upload
-    console.log('Verificando se o arquivo foi enviado:');
-    const files = await client.list();
-    const uploadedFile = files.find(file => file.name === renamedFileName);
-    if (uploadedFile) {
-      console.log(`Arquivo enviado confirmado: ${renamedFileName}, tamanho: ${uploadedFile.size} bytes`);
+    // Verifica se o arquivo foi enviado
+    const fileExists = await client.exists(remotePath);
+    if (fileExists) {
+      const fileInfo = await client.stat(remotePath);
+      console.log(`Arquivo enviado confirmado: ${renamedFileName}, tamanho: ${fileInfo.size} bytes`);
     } else {
       console.log(`Arquivo não encontrado após upload: ${renamedFileName}`);
     }
     
-    console.log(`Arquivo enviado com sucesso para o FTP como: ${renamedFileName}`);
-    await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o FTP`);
+    console.log(`Arquivo enviado com sucesso para o SFTP como: ${renamedFileName}`);
+    await sendSlackAlert(`✅ Arquivo ${renamedFileName} transferido com sucesso para o SFTP`);
     
     return {
       success: true,
-      remotePath: `${config.ftp.directory}/${renamedFileName}`,
+      remotePath: remotePath,
       originalName: originalFileName,
       renamedTo: renamedFileName
     };
   } catch (error) {
-    console.error('Erro ao enviar arquivo para FTP:', error);
-    await sendSlackAlert(`❌ Erro ao enviar arquivo para FTP: ${error.message}`);
+    console.error('Erro ao enviar arquivo para SFTP:', error);
+    await sendSlackAlert(`❌ Erro ao enviar arquivo para SFTP: ${error.message}`);
     throw error;
   } finally {
-    client.close();
-    console.log('Conexão FTP encerrada');
+    await client.end();
+    console.log('Conexão SFTP encerrada');
   }
 }
 
 // Função principal que orquestra todo o processo
-async function transferDailyFileFromS3ToFtp() {
-  console.log('Iniciando processo de transferência S3 -> FTP');
+async function transferDailyFileFromS3ToSftp() {
+  console.log('Iniciando processo de transferência S3 -> SFTP');
   console.log(new Date().toISOString());
   
   workerStatus.isRunning = true;
@@ -277,8 +267,8 @@ async function transferDailyFileFromS3ToFtp() {
     // Baixa o arquivo do S3 para a memória
     const fileData = await downloadFileFromS3(fileName);
     
-    // Envia o arquivo para o FTP diretamente da memória
-    const uploadResult = await uploadFileToFtp(fileData, fileName);
+    // Envia o arquivo para o SFTP diretamente da memória
+    const uploadResult = await uploadFileToSftp(fileData, fileName);
     
     console.log('Processo de transferência concluído com sucesso');
     workerStatus.lastRunStatus = 'success';
@@ -354,7 +344,7 @@ function setupScheduler() {
   cron.schedule(config.cronSchedule, async () => {
     console.log(`Executando job agendado em ${new Date().toISOString()}`);
     try {
-      const result = await transferDailyFileFromS3ToFtp();
+      const result = await transferDailyFileFromS3ToSftp();
       console.log(`Job agendado concluído com status: ${result.success ? 'Sucesso' : 'Falha'}`);
       console.log('Resultado do processo:', result);
     } catch (error) {
@@ -381,7 +371,7 @@ async function main() {
   if (config.runOnStart) {
     console.log('Executando transferência inicial...');
     try {
-      const result = await transferDailyFileFromS3ToFtp();
+      const result = await transferDailyFileFromS3ToSftp();
       console.log('Resultado da transferência inicial:', result);
     } catch (error) {
       console.error('Erro na transferência inicial:', error);
